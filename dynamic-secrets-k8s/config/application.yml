@@ -1,0 +1,72 @@
+---
+# Service to expose web frontend
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9090
+      targetPort: 9090
+
+---
+# Service account to allow pod access to Vault via K8s auth
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+automountServiceAccountToken: true
+
+---
+# Web frontend
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"
+        vault.hashicorp.com/agent-inject-template-db-creds: |
+          {
+          [[- with secret "database/creds/db-app" -]]
+          "db_connection": "postgresql://[[ .Data.username ]]:[[ .Data.password ]]@postgres:5432/wizard"
+          [[- end ]]
+          }
+        vault.hashicorp.com/role: "web"
+        vault.hashicorp.com/service: "http://vault"
+    spec:
+      serviceAccountName: web
+      containers:
+        - name: web
+          image: nicholasjackson/fake-service:v0.7.3
+          ports:
+            - containerPort: 9090
+          env:
+            - name: "LISTEN_ADDR"
+              value: "0.0.0.0:9090"
+            - name: "UPSTREAM_URIS"
+              value: "http://localhost:9091"
+            - name: "NAME"
+              value: "web"
+            - name: "MESSAGE"
+              value: "Hello World"
+            - name: "HTTP_CLIENT_KEEP_ALIVES"
+              value: "false"
