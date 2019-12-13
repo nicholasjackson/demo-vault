@@ -70,7 +70,7 @@ demo-vault-kubernetes on  master [?] via 🐹 v1.13.1 at ☸️  default
 ➜ vault status
 ```
 
-<script id="asciicast-gnd5Cp9vkMawHZRl5nVzdfwaX" src="https://asciinema.org/a/gnd5Cp9vkMawHZRl5nVzdfwaX.js" async></script>
+![](./images/1_status.svg)
 
 ## Configure Vault Kubernetes Authentication
 
@@ -84,9 +84,7 @@ The first step is to enable the Kubernetes authentication backend in Vault.
 vault auth enable kubernetes
 ```
 
-```shell
-Success! Enabled kubernetes auth method at: kubernetes/
-```
+![](./images/2_enable.svg)
 
 The backend then needs to be configured, to configure the backend we need to provide it with:
 
@@ -111,7 +109,7 @@ kubectl get secret $TOKEN_NAME -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.cr
 The token to authenicate with the Kuberentes API can be obtained using a similar process, this is stored at the `data.token` path in the Service Account secret.
 
 ```shell
-kubectl get secret $TOKEN_NAME -o jsonpath='{.data.token}' | base64 -d)
+kubectl get secret $TOKEN_NAME -o jsonpath='{.data.token}' | base64 -d
 ```
 
 Finally you can use this information and to configure the Authentication backend, you do this by writing parameters to the configuration path. You need to set the `token_reviewer_jwt` which is the Kubernetes Service Account Token used to access the API server. If you are running Vault on Kubernetes you can set the `kubernetes_host` parameter to the service which the helm chart creates for you. And finally you set the Kubernetes CA which is used to validate the x.509 certificate used to enable TLS on the API endpoint.
@@ -125,9 +123,7 @@ vault write auth/kubernetes/config \
     kubernetes_ca_cert=@ca.crt
 ```
 
-```shell
-Success! Data written to: auth/kubernetes/config
-```
+![](images/3_configure.svg)
 
 This configuration is only necessary when setting up a new Kubernetes cluster to work with Vault and is a once only operation.
 
@@ -140,6 +136,8 @@ Lets deploy the database using the example from the examples repo, this will cre
 ```yaml
 kubectl apply -f config/postgres.yml
 ```
+
+![](images/4_postgresql.svg)
 
 Next we configure Vault to work with the new database.
 
@@ -184,19 +182,13 @@ You can manually check that this is working by manually requesting Vault creates
 
 ```bash
 vault read database/creds/db-app
-
-Key                Value
----                -----
-lease_id           database/creds/db-app/TFn7HdQSsi1vlsZAFYNLVVap
-lease_duration     1h
-lease_renewable    true
-password           A1a-H1CV9n5ckU4Rn3ai
-username           v-token-db-app-xAtDf94wzrp1yvQaUZtE-1575906706
 ```
+
+![](./images/5_pg_configure.svg)
 
 ## Creating a policy to allows access to the DB role
 
-Permissions to access secrets in Vault are controlled through policy, in order to allow our Kubernetes web service to create 
+Permissions to access secrets in Vault are controlled through policy, in order to allow our Kubernetes web service to create credentials you need to define a policy in Vault which allows `read` access to the secrets. The secrets created in the previous step have a path with the convention `database/creds/[role]`, this gives you a path of `databse/creds/db-app`. You also need to define the capabilities, which are granted for the path, to create dynamic database secrets only the `read` capability is required.
 
 ```ruby
 path "database/creds/db-app" {
@@ -204,12 +196,22 @@ path "database/creds/db-app" {
 }
 ```
 
+Once you have created the policy, you can write it to vault using the following command.
+
 ```shell
-vault policy write web ./config/policy.hcl 
-Success! Uploaded policy: web
+vault policy write web ./config/web-policy.hcl 
 ```
 
+![](./images/6_policy.svg)
+
 ## Create the mapping between K8s service account and the vault policy
+
+The Vault sidecar is going to use the Service Account Token allocated to the pod for authentication to Vault, Vault will exchange this for a Vault Token which is assigned a number of policies. To create this mapping you need to create a `role` in the Kubernetes Auth Method. To do this you write config to `auth\kubernetes/role/[name]`. To assign the policy `web` when authenticating with the service account `web` in the namespace `default`, you can write the following configuration. 
+
+`bound_service_account_names` are the names of the service accounts provided as a comma separated list which can use this role.  
+`bound_service_account_namesapces` are the allowed namespaces for the service accounts.  
+`policies` are the policies which you would like to attach to the token.  
+`ttl` is the time to live for the Vault token returned from a successful authentication.
 
 ```bash
 vault write auth/kubernetes/role/web \
@@ -219,19 +221,116 @@ vault write auth/kubernetes/role/web \
     ttl=1h
 ```
 
+![](./images/7_mapping.svg)
 
-## Deploy our application
+
+## Configuring a deployment to inject secrets
+
+Now the Vault configuration is complete, lets see how we can inject the secrets into our application. The first thing we need to do is ensure that there is a service account which matches the name in the role you configured in the previous step.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+automountServiceAccountToken: true
+```
+
+We can then configure the deployment to automatically inject the database credentials, this is done through annotations. The first annotation we are going to add tells Vault to automatically inject a sidecar to manage secrets into the deployment.
+
+`vault.hashicorp.com/agent-inject: "true"`
+
+You can then tell it which secrets you would like to inject, the below annotation will inject the dynamic database credentials which were configured earlier.
+
+`vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"`
+
+All secrets are injected by default at `/vault/secrets/[name]`, for database credentials the default format would be:
+
+```
+username: random-user-name
+password: random-password
+```
+
+To control the format so that the application can read it in a native format you can use the annotation `vault.hashicorp.com/agent-inject-template-[filename]`, to define a custom template. This template is based on the Consul Template format [https://github.com/hashicorp/consul-template#secret](https://github.com/hashicorp/consul-template#secret). The start block `[[- with secret "database/creds/db-app" -]]`, allows you to select a secret from `database/cred/db-app` and make its data available inside the block. The next line contains `[[ .Data.username ]]` and `[[ .Data.password ]]`, these are template variables which when processed will container the database credentials username and password. Finally you close the block with `[[- end ]]`. 
+
+```yaml
+vault.hashicorp.com/agent-inject-template-db-creds: |
+  {
+  [[- with secret "database/creds/db-app" -]]
+  "db_connection": "postgresql://[[ .Data.username ]]:[[ .Data.password ]]@postgres:5432/wizard"
+  [[- end ]]
+  }
+```
+
+If you remove the template elements the template elements the output would look something like: `{"db_connection": "postgresql://username:password@postgres:5432/wizard"}`.  Templates can contain more than one secret so regardless of the configuration format that your application needs you can define this using the flexible templating language.
+
+Finaly you specify the role which will be used by the sidecar authentication, this is the role you created earlier when configuring Vault.
+
+`vault.hashicorp.com/role: "web"`
+
+Putting all of this together you get a deployment which looks something like the following example:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+  labels:
+    app: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"
+        vault.hashicorp.com/agent-inject-template-db-creds: |
+          {
+          [[- with secret "database/creds/db-app" -]]
+          "db_connection": "postgresql://[[ .Data.username ]]:[[ .Data.password ]]@postgres:5432/wizard"
+          [[- end ]]
+          }
+        vault.hashicorp.com/role: "web"
+        vault.hashicorp.com/service: "http://vault"
+    spec:
+      serviceAccountName: web
+      containers:
+        - name: web
+          image: nicholasjackson/fake-service:v0.7.3
+```
+
+This can be then deployed in the usual Kubernetes way.
 
 ```bash
-kubectl apply -f ./config/application.yml
+kubectl apply -f ./config/web.yml
 ```
 
-Check the output
+The injector will automatically modify your deployment adding a `vault-agent` container which has been configured to authenticate with the Vault server and to write the secrets into your pod.
+
+This can been seen by looking at the file `/vault/secrets/db-creds` in the web pod, if you run the following command you will see the secrets which have been written as a JSON file. Whenever the secrets expire Vault will automatically re-generate this file, your application can watch for changes reloading the configuration as necessary.
 
 ```
-kubectl exec -it web-deployment-5fcb454bc9-xd2gm -c web cat /vault/secrets/db-creds | jq
-{
-  "db_connection": "postgresql://v-kubernet-db-app-Eui3d4uc0wUswYLGU7g8-1575910648:A1a-GpbyTKdHMinXMxAo@postgres:5432/wizard"
-}
+kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[0].metadata.name}")\
+ -c web cat /vault/secrets/db-creds
 ```
 
+Since the deployment contains two pods you can run the following command to look at the second pod, you will see that each pod has been allocated unique databse credentials.
+
+```
+kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[1].metadata.name}")\
+ -c web cat /vault/secrets/db-creds
+```
+
+`termtosvg -t window_frame_powershell -g 102x20 -D 4 ./images/8_secrets.svg`
+
+![](./images/8_secrets.svg)
+
+
+## Summary
+
+In this post we have walked through all of the steps required to configure Vault and Kubernetes in order to provide dynamic database secrets to our applications. Vault is an incredibly powerful tool and is not limited to PostgreSQL as showing in this post.
