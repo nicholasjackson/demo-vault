@@ -68,18 +68,9 @@ export VAULT_TOKEN=root
 
 demo-vault-kubernetes on  master [?] via 🐹 v1.13.1 at ☸️  default 
 ➜ vault status
-Key             Value
----             -----
-Seal Type       shamir
-Initialized     true
-Sealed          false
-Total Shares    1
-Threshold       1
-Version         1.3.0
-Cluster Name    vault-cluster-a34d7889
-Cluster ID      09e599a0-75c7-2616-af09-70a03e6ca7a6
-HA Enabled      false
 ```
+
+<script id="asciicast-gnd5Cp9vkMawHZRl5nVzdfwaX" src="https://asciinema.org/a/gnd5Cp9vkMawHZRl5nVzdfwaX.js" async></script>
 
 ## Configure Vault Kubernetes Authentication
 
@@ -179,7 +170,7 @@ Once the database has been configured you can create a role, the `db_name` refer
 
 To write the role again you can use the `vault write` command:
 
-```
+```bash
 vault write database/roles/db-app \
     db_name=web-db \
     creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; \
@@ -189,9 +180,9 @@ vault write database/roles/db-app \
     max_ttl="24h"
 ```
 
-Test this works
+You can manually check that this is working by manually requesting Vault creates credentials for you, you will see some output similar to that below. Note that both the username and the password are randomly generated and that the initial lease duration corresponds to the `default_ttl`.
 
-```
+```bash
 vault read database/creds/db-app
 
 Key                Value
@@ -203,17 +194,24 @@ password           A1a-H1CV9n5ckU4Rn3ai
 username           v-token-db-app-xAtDf94wzrp1yvQaUZtE-1575906706
 ```
 
+## Creating a policy to allows access to the DB role
 
-## Create the policy which allows access to the DB role
+Permissions to access secrets in Vault are controlled through policy, in order to allow our Kubernetes web service to create 
 
+```ruby
+path "database/creds/db-app" {
+  capabilities = ["read"]
+}
 ```
+
+```shell
 vault policy write web ./config/policy.hcl 
 Success! Uploaded policy: web
 ```
 
 ## Create the mapping between K8s service account and the vault policy
 
-```
+```bash
 vault write auth/kubernetes/role/web \
     bound_service_account_names=web \
     bound_service_account_namespaces=default \
@@ -224,7 +222,7 @@ vault write auth/kubernetes/role/web \
 
 ## Deploy our application
 
-```
+```bash
 kubectl apply -f ./config/application.yml
 ```
 
