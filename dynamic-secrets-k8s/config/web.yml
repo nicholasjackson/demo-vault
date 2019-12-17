@@ -47,7 +47,7 @@ spec:
         vault.hashicorp.com/agent-inject-template-db-creds: |
           {
           [[- with secret "database/creds/db-app" -]]
-          "db_connection": "postgresql://[[ .Data.username ]]:[[ .Data.password ]]@postgres:5432/wizard"
+          "db_connection": "host=postgres port=5432 user=[[ .Data.username ]] password=[[ .Data.password ]] dbname=wizard sslmode=disable"
           [[- end ]]
           }
         vault.hashicorp.com/role: "web"
@@ -56,17 +56,9 @@ spec:
       serviceAccountName: web
       containers:
         - name: web
-          image: nicholasjackson/fake-service:v0.7.3
+          image: hashicorpdemoapp/product-api:v0.0.4
           ports:
             - containerPort: 9090
           env:
-            - name: "LISTEN_ADDR"
-              value: "0.0.0.0:9090"
-            - name: "UPSTREAM_URIS"
-              value: "http://localhost:9091"
-            - name: "NAME"
-              value: "web"
-            - name: "MESSAGE"
-              value: "Hello World"
-            - name: "HTTP_CLIENT_KEEP_ALIVES"
-              value: "false"
+            - name: "CONFIG_FILE"
+              value: "/vault/secrets/db-creds"
