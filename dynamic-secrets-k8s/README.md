@@ -1,8 +1,15 @@
 # Dynamically generating database credentials with Vault and Kubernetes
 
-Providing and rotating database credentials for your pods has always proved operationally challenging. For optimum security you need unique credentials for each application instance, and these credentials need to be short lived, the access restricted by application function,  and the credentials themselves rotated often. HashiCorp Vault solved this challenge by enabling operators to provide dynamically generated credentials for applications. Once Vault has been configured the life cycle and issue of credentials is automatically handled by Vault.
+Providing database credentials for your applications has always proved operationally challenging. For optimum security the following concepts regarding database credentials should be implemented:
 
-The new secret injector for Kubernetes allows an operator or developer to inject Vault secrets into a Kubernetes pod using a series of annotations, the following example would automatically inject and manage the life cycle of database credentials into the deployment for our web service.
+* Each pod should have a unique set of credentials
+* Credentials should be disabled when a pod is terminated
+* Credentials should be short lived and rotated frequently
+* Access should be restricted by application function, a system which only needs to read a specific table should have database access whcih grants this particular purpose
+
+While they previously mentioned concepts are essential for reducing the blast radius in the event of an attack, they can prove operationally challenging. The reality is that without automation it is impossible to satisfy these constraints. HashiCorp Vault solves this challenge by enabling operators to provide dynamically generated credentials for applications. Vault manages the lifecycle of credentials, rotating and revoking as required.
+
+In this blog post we are going to look at the Vault secret injector for Kubernetes, this allows an operator or developer to inject Vault secrets into a Kubernetes pod using metadata annotations. In the following example we are using the annotations to inject database credentials into the Deployment. All the authentication to Vault, the management of the lifecycle of the credentials is automatically handled by the injector. All your application has to do is to read the credentials.
 
 ```
 apiVersion: apps/v1
@@ -25,24 +32,23 @@ spec:
         vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"
 ```
 
-The web application can read these credentials from a config file, Vault will automatically rotate them based on a configured TTL, and from an audit perspective every instance of your application has unique credentials assigned to it.
-
 https://github.com/hashicorp/vault-k8s/blob/agent/agent-inject/agent/annotations.go#L12-L99
 
+When the injector is enabled and you submit a new deployment to Kubernetes a mutating web hook modifies your deployment to automatically inject a Vault sidecar. This sidecar manages the authentication to Vault and the retrieval of secrets, secrets are then written to a volume mount which your application can read. Let's walk through the full process of configuring Vault and Kuberenetes to dynamically create PostgresSQL credentials for a deployment.
 
 ## How Vault works
 
-Before we look at how Vault and Kubernetes is configured, it is worth quickly recapping how Vault works. There are three main components which are required to use Vault, these are:
+Before we look at how Vault and Kubernetes is configured, let's quickly recapping the Vault workflow. There are three main components which are required to use Vault, these are:
 
 * Secrets - either dynamic secrets like database or cloud credentials or static secrets such as API keys or other elements 
 * Policy - the method of defining which secrets or operations a user can perform
 * Authentication  - the method which a user or application logs into Vault and obtains policy
 
+
+
 Using Vault's dynamic secrets engine, it is possible for Vault to generate credentials for your databases on demand. The way that this works is that you configure Vault with static credentials for the database which allow it the ability to generate user credentials. A user or application can then make a request to Vault for database credentials, Vault connects to the database and generates a user account and password with the required access level and returns this to the user. All credentials are created with a time to live, when the TTL expires Vault automatically revokes the credentials in the database.
 
 The Vault Kubernetes integration manages the life cycle of secrets and authentication with Vault automatically for you, it ensures that if the TTL for a secret expires it will automatically renew this for you.
-
-In this blog post we are going to walk through an example of how all this works, you will see how we can provide dynamically generated credentials for a PostgreSQL database to a web application which is running as a deployment in Kubernetes.
 
 ## Installing Vault on Kubernetes
 
