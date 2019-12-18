@@ -191,12 +191,6 @@ For Vault to connect to the database, you need to define the connection string b
 postgresql://{{username}}:{{password}}@postgres:5432/wizard?sslmode=disable"
 ```
 
-The `rotation_statements` parameter, allows you to define a SQL statement which will be executed when rotating the root credentials. We will see how this works in the next step.
-
-```sql
-ALTER ROLE {{username}} WITH PASSWORD '{{password}}';
-```
-
 Finally we define `username` and `password`, these are the initial credentials which Vault will use when connecting to your PostgreSQL database.
 
 We write this configuration in the same way as we did for the role using the `vault write` command. The path this time is going to be `database/config/<connection name>`:
@@ -206,7 +200,6 @@ vault write database/config/wizard \
     plugin_name=postgresql-database-plugin \
     allowed_roles="*" \
     connection_url="postgresql://{{username}}:{{password}}@postgres:5432/wizard?sslmode=disable" \
-    rotation_statements="ALTER ROLE {{username}} WITH PASSWORD '{{password}}';" \
     username="postgres" \
     password="password" \
 
@@ -214,7 +207,7 @@ vault write database/config/wizard \
 
 ### Rotating the root credentials
 
-When you create a new database you need to create root credentials which can be used to configure additional users. In simple example we did this by using the `POSTGRES_PASSWORD` environment variable on the container. In production you would not create credentials in this way, however; since Vault can generate credentials for both humans and applications it is a good idea to remove all traces of the initial username and password. 
+When you create a new database you need to create root credentials which can be used to configure additional users. In simple example we did this by using the `POSTGRES_PASSWORD` environment variable on the container. In production you would not create credentials in this way, however; since Vault can generate credentials for both humans and applications it is a good idea to remove all traces of the initial username and password.
 
 ```yaml
 env:
@@ -222,11 +215,13 @@ env:
     value: password
 ```
 
-When you configured the connection in the previous step you defined a `rotation_statements` parameter. When you request Vault rotates root credentials it connects to the database using its existing root credentials. It then generates a new 
+When you request Vault rotates root credentials it connects to the database using its existing root credentials. It then generates a new password for the configured user, this password is saved in Vault but is not returned to the user.
 
 ```
 vault write /database/rotate-root/wizard
 ```
+
+After running this command you can test that Vault has rotated the credentials by trying to login using `psql` using the original details:
 
 ```shell
 kubectl exec -it $(kubectl get pods --selector "app=postgres" -o jsonpath="{.items[0].metadata.name}") -c postgres -- bash -c 'PGPASSWORD=password psql -U postgres'
@@ -234,15 +229,21 @@ psql: FATAL:  password authentication failed for user "postgres"
 command terminated with exit code 2
 ```
 
-You can manually check that this is working by manually requesting Vault creates credentials for you, you will see some output similar to that below. Note that both the username and the password are randomly generated and that the initial lease duration corresponds to the `default_ttl`.
+Now everything is setup you can test that everything is working by using the `vault read database/creds/<role>` command. 
 
 ```bash
 vault read database/creds/db-app
 ```
 
+If you look at the output from this command you will see that the `username` and `password` have been randomly generated, and the `lease` has been set to the `default_ttl` you configured when creating the role.
+
 ## Configure Vault Kubernetes Authentication
 
-For Kubernetes Pods to access Vault and to request secrets they need to be authenticated with the Vault server. The sidecar container uses the Kubernetes Service Account Token to authenticate with Vault, if authentication is successful then Vault will return a Vault Token which has specific policy attached to it. To enable the authentication process you need to perform a one time configuration on your new Vault cluster. In order for Vault to verify the Kubernetes Service Token, the authentication backend needs to know the location of the Kubernetes API and needs to have it's own valid credentials to access the API. If you used the Helm chart to install Vault on Kubernetes by default the correct RBAC rules and service account will have been created for the Vault service. Lets see how we can use this information to configure Kubernetes authentication.
+Part one of our three step process `Secrets`, `Authentication`, `Policy` has been completed, next lets look at how your application can authenticate with Vault. 
+
+To enable applications to authenticate with Vault we need to enable the Kubernetes authentication backend. This enables a Kubernetes Service Token to be used to authenticate with Vault and for the application to obtain a Vault token. The Vault injector automatically manages the process of authentication for you, but you do need to configure Vault for this process to work.
+
+So Vault can verify the Kubernetes Service Token, the authentication backend needs to know the location of the Kubernetes API and needs to have it's own valid credentials to access the API. If you used the Helm chart to install Vault on Kubernetes, the correct RBAC rules and service account will have been created for the Vault service.
 
 [https://www.vaultproject.io/docs/auth/kubernetes.html](https://www.vaultproject.io/docs/auth/kubernetes.html)
 
@@ -254,7 +255,7 @@ vault auth enable kubernetes
 
 ![](./images/2_enable.svg)
 
-The backend then needs to be configured, to configure the backend we need to provide it with:
+Like the datbase backend, authentication backends also need to be configured, to do this, we need:
 
 * The location of the Kubernetes server
 * A valid JWT which can be used to access the K8s API server
@@ -262,27 +263,58 @@ The backend then needs to be configured, to configure the backend we need to pro
 
 ### Fetching the ca.crt
 
-When you install Vault using the K8s Helm chart a service account called `vault` is created, this service account has the correct RBAC rules to access the K8s API server in order to validate tokens. You can get the token name using the following `kubectl` command. This will store the token name in an environment variable for use later.
+If you installed Vault using the Helm chart, a service account called `vault` is created with the correct RBAC rules to access the K8s API server.
 
-```shell
-export TOKEN_NAME=$(kubectl get serviceaccount/vault -o jsonpath='{.secrets[0].name}')
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-server-binding
+  namespace: default
+  labels:
+    helm.sh/chart: vault
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: production
+    app.kubernetes.io/managed-by: helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: vault
+  namespace: default
 ```
 
-Once you have the token name you can obtain the x.509 root certificate which is used in the chain of trust used to enable SSL for the Kubernetes API. This root certificate is stored in the Service Account secret at the `data.ca.crt` path. The following command obtains the CA and writes it to a file `ca.crt`.
+You can get the name of the Kubernetes secret which holds the token using the following `kubectl` command. This will store the token name in an environment variable for use later.
 
 ```shell
-kubectl get secret $TOKEN_NAME -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+export SECRET_NAME=$(kubectl get serviceaccount/vault -o jsonpath='{.secrets[0].name}')
 ```
 
-The token to authenicate with the Kuberentes API can be obtained using a similar process, this is stored at the `data.token` path in the Service Account secret.
+Once you have the name of the secret containing the service account token, you can obtain the x.509 root certificate which is used in the chain of trust used to enable SSL for the Kubernetes API. This root certificate is stored in secret at the `data.ca.crt` path. 
+
+Execute the following command to obtains the CA and write it to a file `ca.crt`.
 
 ```shell
-kubectl get secret $TOKEN_NAME -o jsonpath='{.data.token}' | base64 -d
+kubectl get secret $SECRET_NAME -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 ```
 
-Finally you can use this information and to configure the Authentication backend, you do this by writing parameters to the configuration path. You need to set the `token_reviewer_jwt` which is the Kubernetes Service Account Token used to access the API server. If you are running Vault on Kubernetes you can set the `kubernetes_host` parameter to the service which the helm chart creates for you. And finally you set the Kubernetes CA which is used to validate the x.509 certificate used to enable TLS on the API endpoint.
+The token to authenticate with the Kubernetes API can be obtained using a similar process, this is stored at the `data.token` path in the secret.
 
-You can run the following command to configure the Kubernetes backend.
+```shell
+kubectl get secret $SECRET_NAME -o jsonpath='{.data.token}' | base64 -d
+```
+
+Finally, you can use this information and to configure the Authentication backend, you do this by writing parameters to the configuration path `auth/kubernetes/config`
+
+You need to set the `token_reviewer_jwt` which is the Kubernetes Service Account Token used to access the API server.
+
+The `kubernetes_host` parameter also needs to be set to the location of the Kubernetes API.  If you are running Vault on Kubernetes then you can use the Kubernetes service address `https://kubernetes:443`. If you are running Vault outside of Kubernetes, this parameter would need to be set to a fully qualified domain or ip address which Vault can use to access the Kubernetes API.
+
+Finally you set the Kubernetes root certificate, which is used to validate TLS connection for the API endpoint.
+
+Run the following command to configure the Kubernetes backend:
 
 ```shell
 vault write auth/kubernetes/config \
@@ -293,13 +325,18 @@ vault write auth/kubernetes/config \
 
 ![](images/3_configure.svg)
 
-This configuration is only necessary when setting up a new Kubernetes cluster to work with Vault and is a once only operation.
+This configuration is only necessary when setting up a new Kubernetes cluster to work with Vault and only needs to be completed once.
 
 ![](./images/5_pg_configure.svg)
 
-## Creating a policy to allows access to the DB role
 
-Permissions to access secrets in Vault are controlled through policy, in order to allow our Kubernetes web service to create credentials you need to define a policy in Vault which allows `read` access to the secrets. The secrets created in the previous step have a path with the convention `database/creds/[role]`, this gives you a path of `databse/creds/db-app`. You also need to define the capabilities, which are granted for the path, to create dynamic database secrets only the `read` capability is required.
+## Creating policy to allow access to the database secrets role
+
+The last part of the configuration is to configure Vault policy. Permissions to access secrets in Vault are controlled through policy, in order to allow our application to create datbase credentials, you need to define a policy in Vault which allows `read` access to the secret.
+
+Policy in Vault is enforced on a `path` level, everything in Vault has a path. For example, the path for database secrets is `database/creds/<role>`. This gives you a path of `databse/creds/db-app` for the role created earlier. 
+
+You also need to define capabilities (create, read, update, delete), which are granted for the path. To create dynamic database secrets only the `read` capability is required.
 
 ```ruby
 path "database/creds/db-app" {
@@ -307,22 +344,32 @@ path "database/creds/db-app" {
 }
 ```
 
-Once you have created the policy, you can write it to vault using the following command.
+If you have checked out the example code this policy can be found at `./config/webpolicy.hcl`. You can write the policy to Vault using the following command. This writes the policy in the file `./config/web-policy.hcl` and assigns it the name `web`.
 
 ```shell
-vault policy write web ./config/web-policy.hcl 
+vault policy write web ./config/web-policy.hcl
 ```
 
 ![](./images/6_policy.svg)
 
-## Create the mapping between K8s service account and the vault policy
 
-The Vault sidecar is going to use the Service Account Token allocated to the pod for authentication to Vault, Vault will exchange this for a Vault Token which is assigned a number of policies. To create this mapping you need to create a `role` in the Kubernetes Auth Method. To do this you write config to `auth\kubernetes/role/[name]`. To assign the policy `web` when authenticating with the service account `web` in the namespace `default`, you can write the following configuration. 
+### Assigning Vault policy to Kubernetes Service Accounts 
 
-`bound_service_account_names` are the names of the service accounts provided as a comma separated list which can use this role.  
-`bound_service_account_namesapces` are the allowed namespaces for the service accounts.  
-`policies` are the policies which you would like to attach to the token.  
+The Vault secret injector uses the Service Account Token allocated to the pod for authentication to Vault.
+
+Vault exchanges this for a Vault Token which has policies assigned. To create this mapping you need to create a `role` in the Kubernetes Auth Method.
+
+To do this you write config to `auth\kubernetes/role/<name>`. To assign the policy `web` when a pod authenticates using the service account `web`, in the namespace `default`, you need to set the following parameters:
+
+`bound_service_account_names` are the names of the service accounts provided as a comma separated list which can use this role.
+
+`bound_service_account_namesapces` are the allowed namespaces for the service accounts.
+
+`policies` are the policies which you would like to attach to the token.
+
 `ttl` is the time to live for the Vault token returned from a successful authentication.
+
+The full command can be seen in the following snippet. Run this in your terminal to create the role.
 
 ```bash
 vault write auth/kubernetes/role/web \
@@ -337,7 +384,9 @@ vault write auth/kubernetes/role/web \
 
 ## Configuring a deployment to inject secrets
 
-Now the Vault configuration is complete, lets see how we can inject the secrets into our application. The first thing we need to do is ensure that there is a service account which matches the name in the role you configured in the previous step.
+Now the Vault configuration is complete, lets see how we can inject the secrets into our application.
+
+The first thing we need to do is ensure that there is a service account which matches the name in the role you configured in the previous step.
 
 ```yaml
 apiVersion: v1
@@ -347,7 +396,7 @@ metadata:
 automountServiceAccountToken: true
 ```
 
-We can then configure the deployment to automatically inject the database credentials, this is done through annotations. The first annotation we are going to add tells Vault to automatically inject a sidecar to manage secrets into the deployment.
+You can then configure the deployment to automatically inject the database credentials, this is done through annotations. The first annotation you need to add tells Vault to automatically inject a sidecar to manage secrets into the deployment.
 
 `vault.hashicorp.com/agent-inject: "true"`
 
@@ -355,7 +404,7 @@ You can then tell it which secrets you would like to inject, the below annotatio
 
 `vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"`
 
-All secrets are injected by default at `/vault/secrets/[name]`, for database credentials the default format would be:
+All secrets are injected by default at `/vault/secrets/<name>`, for database credentials the default format would be:
 
 ```
 username: random-user-name
