@@ -228,6 +228,12 @@ When you configured the connection in the previous step you defined a `rotation_
 vault write /database/rotate-root/wizard
 ```
 
+```shell
+kubectl exec -it $(kubectl get pods --selector "app=postgres" -o jsonpath="{.items[0].metadata.name}") -c postgres -- bash -c 'PGPASSWORD=password psql -U postgres'
+psql: FATAL:  password authentication failed for user "postgres"
+command terminated with exit code 2
+```
+
 You can manually check that this is working by manually requesting Vault creates credentials for you, you will see some output similar to that below. Note that both the username and the password are randomly generated and that the initial lease duration corresponds to the `default_ttl`.
 
 ```bash

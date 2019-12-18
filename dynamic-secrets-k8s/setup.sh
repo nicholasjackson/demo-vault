@@ -9,6 +9,9 @@ yard up --enable-consul false
 echo ""
 echo ""
 
+docker pull docker.pkg.github.com/nicholasjackson/demo-vault/vault-k8s:0.1.0
+docker pull docker.pkg.github.com/nicholasjackson/demo-vault/vault:1.3.1
+
 yard push --image docker.pkg.github.com/nicholasjackson/demo-vault/vault-k8s:0.1.0
 yard push --image docker.pkg.github.com/nicholasjackson/demo-vault/vault:1.3.1
 
