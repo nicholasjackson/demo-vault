@@ -400,7 +400,7 @@ You can then configure the deployment to automatically inject the database crede
 
 `vault.hashicorp.com/agent-inject: "true"`
 
-You can then tell it which secrets you would like to inject, the below annotation will inject the dynamic database credentials which were configured earlier.
+You can then tell it which secrets you would like to inject, the following annotation will inject the database credentials which were configured earlier.
 
 `vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"`
 
@@ -411,20 +411,38 @@ username: random-user-name
 password: random-password
 ```
 
-To control the format so that the application can read it in a native format you can use the annotation `vault.hashicorp.com/agent-inject-template-[filename]`, to define a custom template. This template is based on the Consul Template format [https://github.com/hashicorp/consul-template#secret](https://github.com/hashicorp/consul-template#secret). The start block `[[- with secret "database/creds/db-app" -]]`, allows you to select a secret from `database/cred/db-app` and make its data available inside the block. The next line contains `[[ .Data.username ]]` and `[[ .Data.password ]]`, these are template variables which when processed will container the database credentials username and password. Finally you close the block with `[[- end ]]`. 
+To control the format so that the application can read it in a native format, you can use the annotation `vault.hashicorp.com/agent-inject-template-[filename]`, to define a custom template. This template is based on the Consul Template format [https://github.com/hashicorp/consul-template#secret](https://github.com/hashicorp/consul-template#secret). 
+
+The following annotation example would allow us to use this templating feature to generate a JSON formatted config file which contains a connection string suitable for Go's standard SQL package. Let's step through this line by line.
+
+After the annotation name and pipe which allows us to define a multi-line string as a value in YAML we have standar JSON which denotes the start of an object `{`.
+
+If you look at the following line you will see `{{- with secret "database/creds/db-app" -}}` this is not JSON but part of the templating language which starts a block. We are saying that we would like to read a secret from `datbasse/creds/db-app` and to then make the data from that operation available to anything inside the block.
+
+Then we have the actual connection string itself, we are creating an attribute on our JSON object called `db_connection`, the contents of this is a standard Go SQL connection for PostgreSQL. The exception to this `{{ .Data.username }}` and `{{ .Data.password }}`. The anything encapsulated by `{{ }}` is a template function or variable. In these instances we are retrieving the values of the username and password from the secret and writing them to the config.
+
+`"db_connection": "host=postgres port=5432 user={{ .Data.username }} password={{ .Data.password }} dbname=wizard sslmode=disable"`
+
+Finally we close the secret block with `{{- end }}`.
 
 ```yaml
 vault.hashicorp.com/agent-inject-template-db-creds: |
-  {
-  [[- with secret "database/creds/db-app" -]]
-  "db_connection": "postgresql://[[ .Data.username ]]:[[ .Data.password ]]@postgres:5432/wizard"
-  [[- end ]]
-  }
+{
+{{- with secret "database/creds/db-app" -}}
+  "db_connection": "host=postgres port=5432 user={{ .Data.username }} password={{ .Data.password }} dbname=wizard sslmode=disable"
+{{- end }}
+}
 ```
 
-If you remove the template elements the template elements the output would look something like: `{"db_connection": "postgresql://username:password@postgres:5432/wizard"}`.  Templates can contain more than one secret so regardless of the configuration format that your application needs you can define this using the flexible templating language.
+Once this has been processed the output will look something like:
 
-Finaly you specify the role which will be used by the sidecar authentication, this is the role you created earlier when configuring Vault.
+```json
+{
+  "db_connection": "host=postgres port=5432 user=abcsdsde23sddf password=2323kjc898dfs dbname=wizard sslmode=disable"
+}
+```
+
+The final part of the annotations is to specify the role which will be used by the sidecar authentication, this is the role you created earlier when configuring Vault.
 
 `vault.hashicorp.com/role: "web"`
 
@@ -470,16 +488,16 @@ This can be then deployed in the usual Kubernetes way.
 kubectl apply -f ./config/web.yml
 ```
 
-The injector will automatically modify your deployment adding a `vault-agent` container which has been configured to authenticate with the Vault server and to write the secrets into your pod.
+The injector automatically modifies your deployment adding a `vault-agent` container which has been configured to authenticate with the Vault, and to write the secrets into a shared volume.
 
-This can been seen by looking at the file `/vault/secrets/db-creds` in the web pod, if you run the following command you will see the secrets which have been written as a JSON file. Whenever the secrets expire Vault will automatically re-generate this file, your application can watch for changes reloading the configuration as necessary.
+You can see this in action by running the following command, you will see the secrets which have been written as a JSON file. Whenever the secrets expire Vault will automatically re-generate this file, your application can watch for changes reloading the configuration as necessary.
 
 ```
 kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[0].metadata.name}")\
  -c web cat /vault/secrets/db-creds
 ```
 
-Since the deployment contains two pods you can run the following command to look at the second pod, you will see that each pod has been allocated unique databse credentials.
+Since the deployment contains two pods you can also run the following command to look at the second pod, you will see that each pod has been allocated unique databse credentials.
 
 ```
 kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[1].metadata.name}")\
@@ -493,4 +511,8 @@ kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[1]
 
 ## Summary
 
-In this post we have walked through all of the steps required to configure Vault and Kubernetes in order to provide dynamic database secrets to our applications. Vault is an incredibly powerful tool and is not limited to PostgreSQL as showing in this post.
+In this post we have introduced some of the workflow concepts behind HashiCorp Vault, you have also learned how you can automatically inject secrets into a Kubernetes deployment. While we have focused on dynamic databse secrets for PostgreSQL, Vault supports many more different types of secret engine. 
+
+To learn more about Vault please check out our Learn website [https://learn.hashicorp.com](https://learn.hashicorp.com).
+
+You can also learn more about the various secrets engines in Vault and its API at [https://vaultproject.io](https://vaultproject.io)
