@@ -464,7 +464,6 @@ spec:
           {{- end }}
           }
         vault.hashicorp.com/role: "web"
-        vault.hashicorp.com/service: "http://vault"
     spec:
       serviceAccountName: web
       containers:
