@@ -2,14 +2,12 @@
 
 vault auth enable kubernetes
 
-export TOKEN_NAME=$(kubectl get serviceaccount/vault -o jsonpath='{.secrets[0].name}')
-kubectl get secret $TOKEN_NAME -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
-kubectl get secret $TOKEN_NAME -o jsonpath='{.data.token}' | base64 -d
-
-vault write auth/kubernetes/config \
-    token_reviewer_jwt="$(kubectl get secret $TOKEN_NAME -o jsonpath='{.data.token}' | base64 -d)" \
-    kubernetes_host="https://kubernetes:443" \
-    kubernetes_ca_cert=@ca.crt
+kubectl exec $(kubectl get pods --selector "app.kubernetes.io/instance=vault,component=server" -o jsonpath="{.items[0].metadata.name}") -c vault -- \
+  sh -c ' \
+    vault write auth/kubernetes/config \
+       token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+       kubernetes_host=https://${KUBERNETES_PORT_443_TCP_ADDR}:443 \
+       kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
 
 vault secrets enable database
 
