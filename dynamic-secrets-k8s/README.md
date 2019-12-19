@@ -12,6 +12,7 @@ While these requirements are essential for reducing the blast radius in the even
 In this blog post, we will look at how the Vault integration for Kubernetes allows an operator or developer to use metadata annotations to inject dynamically generated database secrets into a Kubernetes pod. The integration automatically handles all the authentication with Vault and the management of the secrets, the application just reads the secrets from the filesystem.
 
 ## Contents
+
 - [Dynamic Database Credentials with Vault and Kubernetes](#dynamic-database-credentials-with-vault-and-kubernetes)
   - [Contents](#contents)
   - [Summary of Integration Workflow](#summary-of-integration-workflow)
@@ -32,6 +33,7 @@ In this blog post, we will look at how the Vault integration for Kubernetes allo
   - [Summary](#summary)
 
 ## Summary of Integration Workflow
+
 When a new deployment is submitted to Kubernetes, a mutating webhook modifies the deployment, injects a Vault sidecar. This sidecar manages the authentication to Vault and the retrieval of secrets. The retrieved secrets are written to a pod volume mount that your application can read.
 
 For example, we can use Vault to dynamically generate database credentials for a PostgreSQL database. Adding the annotations shown in the following example automatically inject secrets controlled by the db-creds role into the pod.
@@ -71,17 +73,20 @@ Before we will walk through the process of deploying and configuring Vault in a 
 
 ## Prerequisites
 
-If you do not have access to a Kubernetes cluster with Vault and would like to try the features in this blog, you can use `Shipyard` to create a local Docker-based Kubernetes cluster with Vault pre-installed.
+You can install Vault for Kubernetes using the Helm Chart: [https://www.vaultproject.io/docs/platform/k8s/helm/index.html](https://www.vaultproject.io/docs/platform/k8s/helm/index.html)
+
+If you do not have access to a Kubernetes cluster with Vault and would like to try the features in this blog, you can use [Shipyard](https://shipyard.demo.gs) to create a local Docker-based Kubernetes cluster with Vault pre-installed.
 
 ```
 curl https://shipyard.demo.gs/vault | bash
 ```
 
-All the example configuration mentioned in this post can be downloaded at:
+![](https://www.datocms-assets.com/2885/1576786476-install.svg)
 
-```
-http://github.com/nicholasjackson/vault-demo
-```
+
+All the example configuration mentioned in this post is available on GitHub at the following location:
+
+[https://github.com/nicholasjackson/demo-vault/tree/master/dynamic-secrets-k8s](https://github.com/nicholasjackson/demo-vault/tree/master/dynamic-secrets-k8s)
 
 ## Introduction to Vault
 
@@ -96,6 +101,7 @@ In this section, we review how these concepts work in Vault.
 ![](https://www.datocms-assets.com/2885/1576778376-vault-workflow-illustration-policy.png)
 
 ### Secrets
+
 You can have static secrets like an API key or a credit card number or dynamic secrets like auto-generated cloud or database credentials. Vault generates dynamic secrets on-demand, while you receive static secrets already pre-defined.
 
 With static secrets, you must create and manage the lifecycle of the secret. For example, you could store an email account password in Vault but you need to ensure that it is periodically changed.
@@ -107,14 +113,16 @@ One of the critical features of defense in depth is rotating credentials. In the
 ![](https://www.datocms-assets.com/2885/1576778435-vault-db.png)
 
 ### Authentication
+
 To access secrets in Vault, you need to be authenticated; authentication is in the form of pluggable backends. For example, you can use a Kubernetes Service Account token to authenticate to Vault. For human access, you could use something like GitHub tokens. In both of these instances, Vault does not directly store the credentials; instead, it uses a trusted third party to validate the credentials.  With Kubernetes Service Account tokens, when an application attempts to authenticate with Vault, Vault makes a call to the Kubernetes API to ensure the validity of the token. If the token is valid, it returns an internally managed Vault Token, used by the application for future requests.
 
 ![](https://www.datocms-assets.com/2885/1576778470-vault-k8s-auth.png)
 
 ### Policy
+
 Policy ties together secrets and authentication by defining which secrets and what administrative operations an authenticated user can perform. For example, an operator may have a policy which allows them to configure secrets for a PostgreSQL database, but not generate credentials. An application may have permission to create credentials but not configure the backend. Vault policy allows you correctly separate responsibility based on role.
 
-```hcl
+```ruby
 # policy allowing creation and configuration of databases and roles
 path “database/roles/*” {
   capabilities = [“create”, “read”, “update”, “delete”, “list”] 
@@ -153,6 +161,7 @@ vault secrets enable database
 ```
 
 Once the secrets engine has been enabled you can start to create roles.
+
 ### Creating database roles
 
 Role configuration controls the tables to which a user has access and the lifecycle of the credentials. Often multiple roles are created for each connection. For example, an application may require read access on the products table but a human operator may require write access to the users table. 
@@ -214,6 +223,7 @@ vault write database/roles/db-app \
 ![](https://www.datocms-assets.com/2885/1576779138-2createrole.svg)
 
 ### Creating database connections
+
 A connection manages the root access for a database. For example, your PostgreSQL server has the database `wizard` on it. The connection in Vault is the configuration to connect to and authenticate with that database. Like a role, you configure several parameters.
 
 The `plugin_name` parameter configures which database plugin we would like to use. This example is using a PostgreSQL database so you use `postgresql-database-plugin`
@@ -242,6 +252,7 @@ vault write database/config/wizard \
 ![](https://www.datocms-assets.com/2885/1576779279-3createconnection.svg)
 
 ### Rotating the root credentials
+
 When you create a new database, you need to create root credentials for configuring additional users. In the example, you use the `POSTGRES_PASSWORD` environment variable your deployment definition to set the database password on initialization.
 
 ```yaml
@@ -275,6 +286,7 @@ If you look at the output from this command, you see a randomly generated `usern
 ![](https://www.datocms-assets.com/2885/1576779576-4rotatecreds.svg)
 
 ## Authentication - Configuring Kubernetes Authentication in Vault
+
 To enable applications to authenticate with Vault, we need to enable the Kubernetes authentication backend. This backend allows the application to obtain a Vault token by authenticating with Vault using a Kubernetes Service Account token. The Vault injector automatically manages the process of authentication for you, but you do need to configure Vault for this process to work.
 
 For Vault to verify the Kubernetes Service Account token, the authentication backend needs to know the location of the Kubernetes API and needs to have valid credentials to access the API. You must ensure the Vault cluster uses the correct Kubernetes RBAC rules and service account. The Vault Helm chart and [Vault documentation](https://www.vaultproject.io/docs/auth/kubernetes.html) outlines the proper permissions.
@@ -284,6 +296,8 @@ The first step is to enable the Kubernetes authentication backend in Vault.
 ```shell
 vault auth enable kubernetes
 ```
+
+![](./images/2_enable.svg)
 
 Like the database backend, authentication backends also need to be configured, let’s look at the parameters required for this configuration.
 
@@ -309,6 +323,7 @@ This configuration is only necessary when setting up a new Kubernetes cluster to
 ![](https://www.datocms-assets.com/2885/1576779679-5authentication.svg)
 
 ## Policy - Creating policy to allow access to secrets
+
 Policy controls the permissions to access secrets in Vault. In order for our application to create database credentials, you need to define a policy in Vault to allow `read` access to the secret.
 
 Vault applies policy based on the `path` of the secret. For example, the path for database secrets is `database/creds/<role>.` For the role created earlier, you can access the database secret at  `database/creds/db-app`. 
@@ -328,6 +343,7 @@ vault policy write web ./config/web-policy.hcl
 ```
 
 ### Assigning Vault policy to Kubernetes Service Accounts 
+
 The Vault secret injector uses the Service Account Token allocated to the pod for authentication to Vault. Vault exchanges this for a Vault Token, which has policies assigned. 
 
 ![](https://www.datocms-assets.com/2885/1576778470-vault-k8s-auth.png)
@@ -355,6 +371,7 @@ vault write auth/kubernetes/role/web \
 ![](https://www.datocms-assets.com/2885/1576781231-6policy.svg)
 
 ## Injecting secrets into Kubernetes Deployments
+
 Now the Vault configuration is complete, you can inject the secrets into the application.
 
 First, you need to match the name of a Kubernetes Service Account to the name of the role you configured in the previous step.
@@ -481,6 +498,8 @@ kubectl exec -it $(kubectl get pods --selector "app=web" -o jsonpath="{.items[1]
 
 ## Summary
 In this post, we have introduced some of the workflow concepts behind HashiCorp Vault; you have also learned how you can automatically inject secrets into a Kubernetes deployment. While we have focused on dynamic database secrets for PostgreSQL, Vault supports many more different types of secret engine. 
+
+To learn more about the new Vault and Kubernetes integration, take a look at the launch blog [https://www.hashicorp.com/blog/injecting-vault-secrets-into-kubernetes-pods-via-a-sidecar](https://www.hashicorp.com/blog/injecting-vault-secrets-into-kubernetes-pods-via-a-sidecar)
 
 To learn more about Vault, please check out our Learn website [https://learn.hashicorp.com](https://learn.hashicorp.com).
 
