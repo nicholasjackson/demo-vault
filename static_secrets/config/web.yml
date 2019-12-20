@@ -43,11 +43,11 @@ spec:
         app: web
       annotations:
         vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/agent-inject-secret-db-creds: "database/creds/db-app"
-        vault.hashicorp.com/agent-inject-template-db-creds: |
+        vault.hashicorp.com/agent-inject-secret-web: secret/data/web
+        vault.hashicorp.com/agent-inject-template-web: |
           {
-          {{ with secret "database/creds/db-app" -}}
-            "db_connection": "host=postgres port=5432 user={{ .Data.username }} password={{ .Data.password }} dbname=wizard sslmode=disable"
+          {{ with secret "secret/data/web" -}}
+            "api_key": "{{ .Data.data.api_key }}"
           {{- end }}
           }
         vault.hashicorp.com/role: "web"
@@ -60,4 +60,4 @@ spec:
             - containerPort: 9090
           env:
             - name: "CONFIG_FILE"
-              value: "/vault/secrets/db-creds"
+              value: "/vault/secrets/web"
