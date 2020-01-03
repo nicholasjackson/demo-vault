@@ -38,7 +38,7 @@ vault policy write web-dynamic ./config/web-policy.hcl
 
 # Assign the policy to users who authenticate with Kubernetes service accounts called web
 vault write auth/kubernetes/role/web \
-    bound_service_account_names=web-dynamic \
+    bound_service_account_names=web \
     bound_service_account_namespaces=default \
-    policies=web \
+    policies=web-dynamic \
     ttl=1h
