@@ -8,7 +8,7 @@ This demo shows how to dynamically generate PostgreSQL credentials using Vault a
 
 [https://www.vaultproject.io/docs/platform/k8s/injector/index.html](https://www.vaultproject.io/docs/platform/k8s/injector/index.html)
 
-## [Static Secrets with Kubernetes](./static-secrets-k8s/)
+## [Static Secrets with Kubernetes](./static_secrets/)
 
 This demo shows how to use and inject Static Vault secrets into a Kubernetes pod
 
