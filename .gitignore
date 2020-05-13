@@ -1,2 +1,5 @@
 ca.crt
 .git
+vscode.code-workspace
+transform/transform-engine-java/build
+ transform/transform-engine-java/.gradle

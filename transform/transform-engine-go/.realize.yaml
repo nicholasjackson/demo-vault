@@ -1,0 +1,27 @@
+settings:
+  legacy:
+    force: false
+    interval: 0s
+server:
+    status: true
+    open: false
+    host: 0.0.0.0
+    port: 5002
+schema:
+- name: files
+  path: .
+  commands:
+    install:
+      status: true
+      method: go build -o ./bin/server
+    run:
+      status: true
+      method: ./bin/server
+  watcher:
+    paths:
+      - /
+    extensions:
+    - go
+    ignored_paths:
+    - .git
+    - .realize
