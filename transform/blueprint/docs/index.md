@@ -7,13 +7,15 @@ sidebar_label: Introduction
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-Vault 1.4 called Transform. Transform is a Secrets Engine that allows Vault to encode and decode sensitive values residing in external systems such as databases or file systems. This capability allows Vault to ensure that when an encoded secret’s residence system is compromised, such as when a database is breached and its data is exfiltrated, that those encoded secrets remain uncompromised even when held by an adversary.
+Vault 1.4 introduces new feature called Transform. Transform is a Secrets Engine that allows Vault to encode and decode sensitive values residing in external systems such as databases or file systems. This capability allows Vault to ensure that when an encoded secret’s residence system is compromised, such as when a database is breached and its data is exfiltrated, that those encoded secrets remain uncompromised even when held by an adversary.
 
-This post will show you how to implement Transform secrets using Go and PostgreSQL. For information on the technical detail behind the Transform engine
+This post will show you how to implement Transform secrets into a simple API, source code is provided for both the Java and Go programming languages. 
+
+For information on the technical detail behind the Transform engine
 please see Andy's excelent article [https://www.hashicorp.com/blog/transform-secrets-engine](https://www.hashicorp.com/blog/transform-secrets-engine).
 
 ## API Structure
-Our example application is a simple RESTful payment service, there is a single route which accepts a POST request.
+Our example application is a simple RESTful payment service backed by a PostgreSQL database, there is a single route which accepts a POST request.
 
 ```
 POST /order
@@ -42,14 +44,14 @@ On a succesfull call to the API, the data is saved to the database and a transac
 ```
 
 ## Requirements
-The payment service does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until application  picks them up for processing. The applcation has the following requirements:
+Hypothetically the API operates asynchronously, it does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until application  picks them up for processing. The requirements for the API are:
 
 * Credit card details must be stored in the database in an encrypted format
 * It must be possible to query details of the card number without decrypting it
 
-The first requirement is fairly trivial to solve using Vault using the [Transit Secrets Engine](https://www.vaultproject.io/docs/secrets/transit/). Transit secrets can be used as encryption as service to encrypt the credit card details before they are written to the database. The problem is second requirement, for example you wish to know the number of AMEX cards awating processing.
+The first requirement is fairly trivial to solve using Vault using the [Transit Secrets Engine](https://www.vaultproject.io/docs/secrets/transit/). Transit secrets can be used as encryption as service to encrypt the credit card details before they are written to the database. 
 
-A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
+To satisfy the second requirement you need to understand the type of the card and the bank which issued it. Not all the data in a creditcard number is unqiue. A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
 
 ![](./images/card.png)
 
@@ -62,6 +64,10 @@ One of the benefits of the `Transit Secrets Engine` for developers is that they 
 Using the `Transit Secrets Engine` a developer only needed to call a simple API and store the result.
 
 With this new requirement for searching information the developer now has the responsiblity for managing the complexity of partially encrypting the credit card data, Info security need to worry about the correct implementation of this.
+
+By only encrypting the account number and cv2 data are you reducing the level of security for storing the card number?
+
+A number containing 16 digits has a possibility of 16^16 combinations plus the CV2 number is roughly 10 quintillion different permiatations. If we are only storing 10 digits plus the CV2 this would be 10^13 or about 10 trillion combinations. In reality since the first 6 digitis of a card number are the issue and the card type there are not 1 million different issuers, lets say there are 10,000, storing the full 16 digits would give you roughly 100 quadrillion combinations. In both cases we need to remove the checksum so we get 10 quadrillion combinations if you encrypt the account number and 1 trillion if you do not. Yes, not encrypting the issuer means someone can make less guesses to determine the number but they still need to make 1 trillion guesses. If you assume an API request time of 100ms to accept or reject a payment it is going to take a worse case time of 190258 years for someone to brute force a payment if they obtain your partiay encrypted data.  Ok, fun math to one side, since it is OK to partially encrypt the data. Let's see how you can do it.
 
 ## Transform Secrets Engine
 The solution is to use the Transform Secrets Engine, Transform Secrets allows the definition of the encription structure as a central concern. Developers can call a simple API which allows them to encrypt the data as required.
