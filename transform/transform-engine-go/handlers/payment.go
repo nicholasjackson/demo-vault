@@ -25,6 +25,8 @@ func NewPayment(pc *data.PostgreSQL, vc *vault.Client, log hclog.Logger) *Paymen
 // PaymentRequest is sent as part of the HTTP request
 type PaymentRequest struct {
 	CardNumber string `json:"card_number"`
+	Expiration string `json:"expiration"`
+	CV2        string `json:"cv2"`
 }
 
 // PaymentResponse is sent with a successful payment

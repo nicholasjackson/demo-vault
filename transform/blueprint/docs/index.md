@@ -7,15 +7,14 @@ sidebar_label: Introduction
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-Vault 1.4 introduces new feature called Transform. Transform is a Secrets Engine that allows Vault to encode and decode sensitive values residing in external systems such as databases or file systems. This capability allows Vault to ensure that when an encoded secret’s residence system is compromised, such as when a database is breached and its data is exfiltrated, that those encoded secrets remain uncompromised even when held by an adversary.
+Vault 1.4 introduced new feature called Transform. Transform is a Secrets Engine that allows Vault to encode and decode sensitive values residing in external systems such as databases or file systems. This capability allows Vault to ensure that when an encoded secret’s residence system is compromised, such as when a database is breached and its data is exfiltrated, that those encoded secrets remain uncompromised even when held by an adversary.
 
 This post will show you how to implement Transform secrets into a simple API, source code is provided for both the Java and Go programming languages. 
 
-For information on the technical detail behind the Transform engine
-please see Andy's excelent article [https://www.hashicorp.com/blog/transform-secrets-engine](https://www.hashicorp.com/blog/transform-secrets-engine).
+For information on the technical detail behind the Transform engine please see Andy's excelent article [https://www.hashicorp.com/blog/transform-secrets-engine](https://www.hashicorp.com/blog/transform-secrets-engine).
 
 ## API Structure
-Our example application is a simple RESTful payment service backed by a PostgreSQL database, there is a single route which accepts a POST request.
+Our example application is a simple RESTful payment service, backed by a PostgreSQL database, there is a single route which accepts a POST request.
 
 ```
 POST /order
@@ -23,12 +22,12 @@ Content-Type: application/json
 ```
 
 ### Request
-The data for the API is a simple JSON data structure which contains a single field for the card number.
+The data for the API is sent as JSON and has three fields for the `card number`, the `expiration` and the `cv2`.
 
 ```json
 {
   "card_number": "1234-1234-1234-1234",
-  "card_expiration": "10/12",
+  "expiration": "10/12",
   "cv2": "123"
 }
 ```
@@ -44,60 +43,67 @@ On a succesfull call to the API, the data is saved to the database and a transac
 ```
 
 ## Requirements
-Hypothetically the API operates asynchronously, it does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until application  picks them up for processing. The requirements for the API are:
+Hypothetically, the API operates asynchronously, it does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until application picks them up for processing. The requirements for the API are:
 
 * Credit card details must be stored in the database in an encrypted format
 * It must be possible to query details of the card number without decrypting it
 
 The first requirement is fairly trivial to solve using Vault using the [Transit Secrets Engine](https://www.vaultproject.io/docs/secrets/transit/). Transit secrets can be used as encryption as service to encrypt the credit card details before they are written to the database. 
 
-To satisfy the second requirement you need to understand the type of the card and the bank which issued it. Not all the data in a creditcard number is unqiue. A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
+To satisfy the second requirement you need to be able to query the type of the card and the bank which issued it, you can get this data from the card number as not all the data in a credit card number is unqiue. A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
 
 ![](./images/card.png)
 
 `Issuer Number` relates to the type of the card (first digit), and the issuers code this is the information which you would like to query to satisfy the second requirement.
 
-To enable this you either have to manually partially encrypt the card number or you have to store metadata for the card. This of course is possible however control of the process can not be centrally managed. It requires developers working with the data to understand and implement the process. 
+To be able to query the card issuer you realistically have two options:
 
-One of the benefits of the `Transit Secrets Engine` for developers is that they do not need to worry about if they have correctly implemented the encryption correctly. Operators do not need to worry if they have provided the applicaion the means to encrypt data. Info security do not need to worry that central policy regarding the handling of PII has been adhered.
+1. Partially encrypt the card number in the databse
+1. Store metadata for the card along with the encrypted values
 
-Using the `Transit Secrets Engine` a developer only needed to call a simple API and store the result.
-
-With this new requirement for searching information the developer now has the responsiblity for managing the complexity of partially encrypting the credit card data, Info security need to worry about the correct implementation of this.
-
-By only encrypting the account number and cv2 data are you reducing the level of security for storing the card number?
-
-A number containing 16 digits has a possibility of 16^16 combinations plus the CV2 number is roughly 10 quintillion different permiatations. If we are only storing 10 digits plus the CV2 this would be 10^13 or about 10 trillion combinations. In reality since the first 6 digitis of a card number are the issue and the card type there are not 1 million different issuers, lets say there are 10,000, storing the full 16 digits would give you roughly 100 quadrillion combinations. In both cases we need to remove the checksum so we get 10 quadrillion combinations if you encrypt the account number and 1 trillion if you do not. Yes, not encrypting the issuer means someone can make less guesses to determine the number but they still need to make 1 trillion guesses. If you assume an API request time of 100ms to accept or reject a payment it is going to take a worse case time of 190258 years for someone to brute force a payment if they obtain your partiay encrypted data.  Ok, fun math to one side, since it is OK to partially encrypt the data. Let's see how you can do it.
+With this new requirement for searching information, the developers now have the responsiblity for managing the complexity of partially encrypting the credit card data, Info security need to worry about the correct implementation of this.
 
 ## Transform Secrets Engine
-The solution is to use the Transform Secrets Engine, Transform Secrets allows the definition of the encription structure as a central concern. Developers can call a simple API which allows them to encrypt the data as required.
+To satisfy this second requirement the Transform Secrets Engine can be used. Transform allows you to encrypt data while preserving formatting or to partially encrypt data. The definition of the encryption process can be be centraly managed by the Info security team, the Developers only need to call a simple API which allows them to encrypt the card numbers. In our usecase where you need to partially encrypt the credit card numbers leaving the issuer as queryable data, a transform could be defined which takes the card number, for example `1234-5624-6310-0053` and encrypts the sensitive parts while retaining the formatting and the ability to infer information about the card type and issuing bank. 
 
-To satisfy your second requirement a transform could be defined which would take a card number for example `1234-5624-6310-0053` and encrypt the sensitive parts, while retaining the formatting and the ability to infer information about the card type and issuing bank. 
-
-The transform engine allows you to define a pattern using regular expressions, the capture groups inside of the regular expressions are replaced
-with cyphertext. Anything outside the match groups are left in the original format. To encrypt only the account number and checksum for your cards you could use the following regular expression.
+Transforms are defined as regular expressions, the capture groups inside the expression is replaced with cyphertext, anything outside the match groups is left in the original format. To encrypt only the account number and checksum for your cards you could use the following regular expression.
 
 ```
 \d{4}-\d{2}(\d{2})-(\d{4})-(\d{4})
 ```
 
-Given an input of:
+Given an input credit card number:
 
 ```
 1234-5611-1111-1111
 ```
 
-You would get a cyphertext output of:
+Vault would return the cyphertext:
 
 ```
 1234-5672-6649-0472
 ```
 
-Note that the first 6 digits have not been encrypted. 
+Note the first 6 digits have not been replaced with cyphertext as there was not capture group in the regular expression for this text, the formatting of the data is also preserved.
+
+## Real world impact of partially encrypting data
+By only encrypting the account number and cv2 data are you reducing the level of security for storing the card number?
+
+The short answer is yes, but lets take a quick look at if that really matters.
+
+A number containing 16 digits has a possibility of **16^16** combinations plus the CV2 number is roughly **10 quintillion** different permiatations. 
+
+If you are only storing 10 digits plus the CV2 this would be **10^13** or about **10 trillion** combinations. 
+
+In reality since the first 6 digitis of a card number are the issue and the card type there are not 1 million different issuers, lets say there are 10,000, storing the full 16 digits would give you roughly **100 quadrillion** combinations. In both cases we need to remove the checksum so we get **10 quadrillion combinations** if you encrypt the account number and **1 trillion** if you do not. 
+
+Yes, not encrypting the issuer means someone can make less guesses to determine the number but they still need to make **1 trillion guesses**. Let's assume someone managed to obtain your database containing partially encrypted card numbers. If you assume an API request time of 100ms to accept or reject a payment, with a sequential process, it is going to take a worse case time of **190258 years** for someone to brute force a payment. 
+
+Even if the attacker was running parralel attacks the odds are heavily stacked against them. Fun math to one side, since we have determined that it is secure to partially encrypt these credit card numbers. Let's see how to do it.
 
 ## Configuring Transform Secrets
 
-To use Transform secrets you must be using Vault Enterprise version 1.4 or above. You can enable the Transform secrets engine with the following command.
+To use Transform secrets you must be using Vault Enterprise version 1.4 or above, and like all secrets engines in Vault other than the default Key Value, it needs to be enabled before you use it. To enable the transform secrets engine, you can use the following command.
 
 ```
 vault secrets enable transform
@@ -106,19 +112,21 @@ vault secrets enable transform
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" expanded />
 <p></p>
 
-The Transform secrets engine contains several types of resources that encapsulate different aspects of the information required in order to perform data transformation.
+To encrypt data with the transform secrets engine, there are several resources which encapsulate different aspects of the information required that need to be configured in order to perform data transformation. These are:
 
-* Roles are the basic high-level construct that holds the set of transformation that it is allowed to performed. The role name is provided when performing encode and decode operations.
+* **Roles** - Roles are the basic high-level construct that holds the set of transformation that it is allowed to performed. The role name is provided when performing encode and decode operations.
 
-* Transformations hold information about a particular transformation. It contains information about the type of transformation that we want to perform, the template that it should use for value detection, and other transformation-specific values such as the tweak source or the masking character to use.
+* **Transformations** - Transformations hold information about a particular transformation. It contains information about the type of transformation that we want to perform, the template that it should use for value detection, and other transformation-specific values such as the tweak source or the masking character to use.
 
-* Templates allow us to determine what and how to capture the value that we want to transform.
+* **Templates** - Templates allow us to determine what and how to capture the value that we want to transform.
 
-* Alphabets provide the set of valid UTF-8 character contained within both the input and transformed value on FPE transformations.
+* **Alpahbets** - Alphabets provide the set of valid UTF-8 character contained within both the input and transformed value on FPE transformations.
 
 Let's see how each of these elements is confiugred:
 
-First we need to create a role, when creating the role you need to provide the list of transformations which can be used from this role. 
+### Roles
+
+First we need to create a role, when creating the role you need to provide the list of transformations which can be used from this role.
 
 ```
 vault write transform/role/payments transformations=ccn-fpe

@@ -2,4 +2,5 @@ ca.crt
 .git
 vscode.code-workspace
 transform/transform-engine-java/build
- transform/transform-engine-java/.gradle
+transform/transform-engine-java/bin
+transform/transform-engine-java/.gradle
