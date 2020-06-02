@@ -13,3 +13,9 @@ This demo shows how to dynamically generate PostgreSQL credentials using Vault a
 This demo shows how to use and inject Static Vault secrets into a Kubernetes pod
 
 [https://www.vaultproject.io/docs/platform/k8s/injector/index.html](https://www.vaultproject.io/docs/platform/k8s/injector/index.html)
+
+## [Format Preserving Encryption with the Transform Secrets Engine](./transform/)
+
+This demo shows how to encrypt data while preserving data formatting using the Transform secrets engine
+
+[https://www.vaultproject.io/docs/secrets/transform](https://www.vaultproject.io/docs/secrets/transform)

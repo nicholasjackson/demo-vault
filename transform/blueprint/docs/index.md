@@ -43,28 +43,34 @@ On a succesfull call to the API, the data is saved to the database and a transac
 ```
 
 ## Requirements
-Hypothetically, the API operates asynchronously, it does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until application picks them up for processing. The requirements for the API are:
+The API operates asynchronously, it does not immedidately process the payments for the orders, instead it stores the card numbers in a PostgreSQL database until another application picks them up for processing. The security requirements for the API are:
 
 * Credit card details must be stored in the database in an encrypted format
 * It must be possible to query details of the card number without decrypting it
 
-The first requirement is fairly trivial to solve using Vault using the [Transit Secrets Engine](https://www.vaultproject.io/docs/secrets/transit/). Transit secrets can be used as encryption as service to encrypt the credit card details before they are written to the database. 
+The first requirement is fairly trivial to solve using Vault and the [Transit Secrets Engine](https://www.vaultproject.io/docs/secrets/transit/). Transit secrets can be used as encryption as service to encrypt the credit card details before they are written to the database. 
 
-To satisfy the second requirement you need to be able to query the type of the card and the bank which issued it, you can get this data from the card number as not all the data in a credit card number is unqiue. A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
+To satisfy the second requirement, you need to be able to query the type of the card and the bank which issued it, you can get this data from the card number as not all the data in a credit card number is unqiue. A credit card number is composed from three different parts, the `Issuer Number`, the `Account Number` and the `Checksum`.
 
 ![](./images/card.png)
 
 `Issuer Number` relates to the type of the card (first digit), and the issuers code this is the information which you would like to query to satisfy the second requirement.
+
+`Account Number` is the unique identifier assigned to the holder of the card
+
+`Checksum` is not a secret part of the card number instead it is desined for quick error checking. The checksum is generated from the card number, before processing the checksum is regenerated using the Luhn algorithm if the given and the computed checksums differ then the card number has been entered incorrectly. 
 
 To be able to query the card issuer you realistically have two options:
 
 1. Partially encrypt the card number in the databse
 1. Store metadata for the card along with the encrypted values
 
-With this new requirement for searching information, the developers now have the responsiblity for managing the complexity of partially encrypting the credit card data, Info security need to worry about the correct implementation of this.
+To implement this requirement in code, the developers have the responsiblity for managing the complexity of partially encrypting the credit card data, and information security need to worry about the correct implementation of this.
 
 ## Transform Secrets Engine
-To satisfy this second requirement the Transform Secrets Engine can be used. Transform allows you to encrypt data while preserving formatting or to partially encrypt data. The definition of the encryption process can be be centraly managed by the Info security team, the Developers only need to call a simple API which allows them to encrypt the card numbers. In our usecase where you need to partially encrypt the credit card numbers leaving the issuer as queryable data, a transform could be defined which takes the card number, for example `1234-5624-6310-0053` and encrypts the sensitive parts while retaining the formatting and the ability to infer information about the card type and issuing bank. 
+To simplify the process while still satisfing the second requirement, Vault's `Transform Secrets Engine` can be used. Transform allows you to encrypt data while preserving formatting or to partially encrypt data based on user configurable formula. The definition for the encryption process can be be centraly managed by the info security team, and the developers can use the Transform API allowing them to encrypt the card numbers. 
+
+In our usecase where there is a need to partially encrypt the credit card numbers leaving the issuer as queryable data, a transform could be defined which takes the card number, for example `1234-5624-6310-0053`, encrypts the sensitive parts, while retaining the formatting and the ability to infer information about the card type and issuing bank. 
 
 Transforms are defined as regular expressions, the capture groups inside the expression is replaced with cyphertext, anything outside the match groups is left in the original format. To encrypt only the account number and checksum for your cards you could use the following regular expression.
 
@@ -84,35 +90,35 @@ Vault would return the cyphertext:
 1234-5672-6649-0472
 ```
 
-Note the first 6 digits have not been replaced with cyphertext as there was not capture group in the regular expression for this text, the formatting of the data is also preserved.
+Note the first 6 digits have not been replaced with cyphertext as there are no capture groups in the regular expression for this text, the formatting of the data is also preserved as this was outside the capture groups.
 
 ## Real world impact of partially encrypting data
-By only encrypting the account number and cv2 data are you reducing the level of security for storing the card number?
+You may be wondering, by only encrypting the account number and cv2 data are you reducing the level of security for storing the card number?
 
-The short answer is yes, but lets take a quick look at if that really matters.
+The short answer is yes, but in real terms it probably does not make a difference.
 
-A number containing 16 digits has a possibility of **16^16** combinations plus the CV2 number is roughly **10 quintillion** different permiatations. 
+A number containing 16 digits has a possibility of **16^16** combinations, including the CV2 number this roughly equates to **10 quintillion** different permiatations. 
 
-If you are only storing 10 digits plus the CV2 this would be **10^13** or about **10 trillion** combinations. 
+If you only store 10 digits of the card number plus the CV2 this is **10^13**, or about **10 trillion** combinations. 
 
-In reality since the first 6 digitis of a card number are the issue and the card type there are not 1 million different issuers, lets say there are 10,000, storing the full 16 digits would give you roughly **100 quadrillion** combinations. In both cases we need to remove the checksum so we get **10 quadrillion combinations** if you encrypt the account number and **1 trillion** if you do not. 
+In reality, since the first 6 digits of a card number are the issuer and card type, there are not 1 million different issuers, lets say there are 10,000, storing the full 16 digits would give you roughly **100 quadrillion** combinations. In both cases we need to remove the checksum so we get **10 quadrillion combinations** if you encrypt the account number and **1 trillion** if you do not. 
 
-Yes, not encrypting the issuer means someone can make less guesses to determine the number but they still need to make **1 trillion guesses**. Let's assume someone managed to obtain your database containing partially encrypted card numbers. If you assume an API request time of 100ms to accept or reject a payment, with a sequential process, it is going to take a worse case time of **190258 years** for someone to brute force a payment. 
+Yes, not encrypting the issuer means someone can make less guesses to determine the number but they still need to make **1 trillion guesses**. Assuming someone managed to obtain your database containing partially encrypted card numbers. If you had an average API request time of 100ms to accept or reject a payment, it would take about **190258 years** for someone to brute force a payment. Even if the attacker was running parralel attacks the odds are heavily stacked against them. 
 
-Even if the attacker was running parralel attacks the odds are heavily stacked against them. Fun math to one side, since we have determined that it is secure to partially encrypt these credit card numbers. Let's see how to do it.
+Fun math to one side, since we have determined it is secure to partially encrypt these credit card numbers, let's see how to do it.
 
 ## Configuring Transform Secrets
 
-To use Transform secrets you must be using Vault Enterprise version 1.4 or above, and like all secrets engines in Vault other than the default Key Value, it needs to be enabled before you use it. To enable the transform secrets engine, you can use the following command.
+The Transform secrets engine is only available with **Vault Enterprise version 1.4** and above. With all versions of Vault, only the the Key/Value engine and the Cubbyhole secrets engines are enabled by default. To use the Transform Secrets Engine it first needs to be enabled, you can use the following command.
 
-```
+```shell
 vault secrets enable transform
 ```
 
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" expanded />
 <p></p>
 
-To encrypt data with the transform secrets engine, there are several resources which encapsulate different aspects of the information required that need to be configured in order to perform data transformation. These are:
+To encrypt data with the transform secrets engine, there are several resources which encapsulating different aspects of the transform process that need to be configured. These are:
 
 * **Roles** - Roles are the basic high-level construct that holds the set of transformation that it is allowed to performed. The role name is provided when performing encode and decode operations.
 
@@ -122,34 +128,51 @@ To encrypt data with the transform secrets engine, there are several resources w
 
 * **Alpahbets** - Alphabets provide the set of valid UTF-8 character contained within both the input and transformed value on FPE transformations.
 
-Let's see how each of these elements is confiugred:
+Let's walk through each of the steps.
 
 ### Roles
 
-First we need to create a role, when creating the role you need to provide the list of transformations which can be used from this role.
+First we need to create a role called `payments`, when creating the role you provide the list of transformations which can be used from this role using the `transformations` parameter. The trasformation `ccn-fpe` referenced in the example role below has not yet been created, you will do that in the next step; you can still create the role, the `transformations` parameter is a "soft" constraint, you can also update transformations in a role after it has been created.
 
-```
+```shell
 vault write transform/role/payments transformations=ccn-fpe
 ```
 
-<Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" expanded />
+<Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
 <p></p>
 
-Then we can create a Transform:
+### Transformations
+
+Next we create a transformation called `ccn-fpe`, this is the same name that was referenced when you create the role in the previous step. The parameter `type` defines the transform operation you would like to perform, this has two possible values:
+
+* `fpe` - use Format Preserving Encryption using the FF3-1 algoryrthm
+* `masking` - this process replaces the sensitive characters in a transformation with a desired character but is not reversable. 
+
+`tweak_source` is a non-confidential value which is stored alongside the ciphertext used when performing encryption and decryption operations. This parameter takes one of three permissible values, `supplied`, `generated`, `internal`. This example uses the `internal` value which delegates the creation and storage of the tweak value to Vault. More information on tweak source can be found in the Vault documentation, [https://www.vaultproject.io/docs/secrets/transform#tweak-source](https://www.vaultproject.io/docs/secrets/transform#tweak-source).
+
+The `template` parameter relates to the template which will be used by the transform, you can define templates and reuse them across multiple different transformations. Vault has two built in Templates which can be used `builtin/creditcardnumber` and `builtin/socialsecuritynumber`.
+
+Finally, you specify the `allowed_roles`, specifying allowed roles ensures that the creator of the role is allowed to use this transformation.
 
 ```
 vault write transform/transformation/ccn-fpe \
 type=fpe \
-template=ccn \
 tweak_source=internal \
+template=ccn \
 allowed_roles=payments
 ```
 
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
+<p></p>
 
-Then define the template
+### Templates
 
-```
+The template defines what in the data is encrypted by the transform, templates are specfied as regular expressions, the capture groups in the expression define 
+the elements of the input which will be replaced with cyphertext.
+
+The below example creates a template called `ccn`. The `type` parameter is set to `regex` which is currently the only option supported by the backend. Then you specify a `pattern` as a valid regular expression. For `fpe` transformations you need to specify the `alphabet`, the `alphabet` is a custom character set which will be used in the outputed cyphertext. `alphabet` can either be a custom alphabet like the example below or one of the [built in](https://www.vaultproject.io/docs/secrets/transform#alphabets) values.
+
+```shell
 vault write transform/template/ccn \
 type=regex \
 pattern='\d{4}-\d{2}(\d{2})-(\d{4})-(\d{4})' \
@@ -158,7 +181,9 @@ alphabet=numerics
 
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
 
-Optionally we can create a custom alphabet, the custom alphabet allows us to define the characters which will be used in the output of the cyphertext.
+### Alphabets
+
+Creating custom alphabets is an optional step for a transform, Vault has a number of built in alphabets covering common usecases however you wish your cypher text to be composed of a specific set of unicode characters. To define a custom alphabet you use the following command, this command creates a custom alphabet called `numerics`  using the characters `0-9`.
 
 ```shell
 vault write transform/alphabet/numerics \
@@ -166,10 +191,11 @@ alphabet="0123456789"
 ```
 
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
+<p></p>
 
-## Testing the setup
+## Testing the transform
 
-Now all of that is configured you can test the setup
+Now all of the components have been configured you can test the setup by writing data to the path `transform/encode/payments`, the part of the path `payments` refers to the name of your transform created in the previous steps.
 
 ```
 vault write transform/encode/payments value=1111-2222-3333-4444
@@ -177,7 +203,7 @@ vault write transform/encode/payments value=1111-2222-3333-4444
 
 <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
 
-You should see some output which looks similar to the following
+You will see an output which looks similar to the following. Note that the first 6 digits of the returne cyphertext are the same as the original data.
 
 ```
 Key              Value
@@ -185,35 +211,45 @@ Key              Value
 encoded_value    1111-2200-1452-4879
 ```
 
-Note that the first 6 digits of the returne cyphertext are the same as the original data.
-
-You can reverse the operation with the following command.
+To decode this cyphertext and reverse the operation, you write data to the `transform/decode/payments` path.
 
 ```
 vault write transform/decode/payments value=<encoded_vaule>
 
 vault write transform/decode/payments value=1111-2200-1452-4879
 ```
+
+You will see output which looks similar to the below example:
+
+```shell
+Key              Value
+---              -----
+decoded_value    1111-2222-3333-4444
+```
+
 <p>
   <Terminal target="vault.container.shipyard.run" shell="/bin/sh" workdir="/" user="root" />
 </p>
 
 
-## Using Transform from your application
+## Using Transform in your application
 
-So far you have seen how you can use the Transform engine using the CLI, Vault has a comprehensive API, everything possible using the CLI is also possible using the RESTful API. To interact with the Vault API you have three options:
+So far you have seen how you can use the Transform engine using the CLI, to use the transform engine from your application you need to use Vault's API, everything possible using the CLI is also possible using the RESTful API. To interact with the Vault API you have three options:
 
 1. Use one of the [Client libraries](https://www.vaultproject.io/api/libraries.html)
 1. Code generate your own client using the [OpenAPI v3 specifications](https://www.vaultproject.io/api-docs/system/internal-specs-openapi)
 1. Manually interact with the HTTP API 
 
-The third example is the one we are going to use as it demonstrates the simplicity rather nicely for interaction with Vault.
+This example is going to demonstrate the third option, as this demonstrates the simplicity with interacting with Vault's API.
 
-Since the example application only needs to encode data and not manage the configuration for Transform it only needs to interact with a single API endpoint which is Encode.
+The example application only needs to encode data, and not manage the configuration for Transform, to do this it only needs to interact with a single API endpoint which is Encode.
 
 https://www.vaultproject.io/api-docs/secret/transform#encode
 
-To encode data using Transform you `POST` a JSON payload to the path `/v1/transform/encode/:role_name`, where in this example `:role_name` would be `payments` which is the name of the role created earlier. 
+
+## Using the Transform Encode API
+
+To encode data using transform secrets engine, you `POST` a JSON payload to the path `/v1/transform/encode/:role_name`, in this example `:role_name` is `payments`, which is the name of the role created earlier. 
 
 The API requires that you have a valid Vault token and that token has the correct policy allocated to it in order to perform the operation. The Vault token is sent to the request using the `X-Vault-Token` HTTP header. 
 
@@ -233,7 +269,7 @@ curl localhost:8200/v1/transform/encode/payments \
   -d '{"value": "1111-2222-3333-4444"}'
 ```
 
-Vault will return the cyphertext as part of a JSON response, this value is returned at the path `.data.encoded_value` as can be seen in the example output below.
+Vault returns the cyphertext inside the JSON response, this value is returned at the path `.data.encoded_value` as shown in the example output below.
 
 ```json
 {
@@ -250,9 +286,11 @@ Vault will return the cyphertext as part of a JSON response, this value is retur
 }
 ```
 
+Now you understand the basics with interacting with the API let's see how this can be done from your applications code.
+
 ## Interacting with the Vault API from Java and Go
 
-The first thing we need to do is to construct a byte array which holding a JSON formatted string for our payload.
+The first thing we need to do is to construct a byte array which holds a JSON formatted string for your payload.
 
 <Tabs
   defaultValue="go"
@@ -288,7 +326,7 @@ byte[] byteRequest = mapper.writeValueAsBytes(req);
 
 </Tabs>
 
-Then you can construct the request, ensuring the payload is written as part of the request body.
+You can then construct the request, setting this payload as part of the request body.
 
 <Tabs
   defaultValue="go"
@@ -340,7 +378,7 @@ try(OutputStream os = con.getOutputStream()) {
 
 </Tabs>
 
-Finally the response can be read from the HTTP response body and parsed back into a native object.
+To read the JSON response, you can parse the response body from the HTTP client into a simple structure. 
 
 <Tabs
   defaultValue="go"
@@ -376,9 +414,11 @@ TokenResponse resp = new ObjectMapper()
 
 </Tabs>
 
+Full source code for both examples can be found at: [https://github.com/nicholasjackson/demo-vault/tree/master/transform](https://github.com/nicholasjackson/demo-vault/tree/master/transform)
+
 ## Testing the service
 
-Let's test the service, the demo has both the Java and the Go code running
+Let's test the service, the demo has both the Java and the Go code running, so you can use `curl` to test it.
 
 <Tabs
   defaultValue="go"
@@ -405,7 +445,9 @@ curl payments-java.container.shipyard.run:9090 -H "content-type: application/jso
 </TabItem>
 </Tabs>
 
-<Terminal target="payments-go.container.shipyard.run" shell="sh" workdir="/" user="root"/>
+<p>
+  <Terminal target="payments-go.container.shipyard.run" shell="sh" workdir="/" user="root"/>
+</p>
 
 You should see a response something like the following
 
@@ -419,9 +461,11 @@ If you query the orders table on the database you will be able to see the encryp
 PGPASSWORD=password psql -h localhost -p 5432 -U root -d payments -c 'SELECT * from orders;'
 ```
 
-<Terminal target="postgres.container.shipyard.run" shell="/bin/bash" workdir="/" user="root"/>
+<p>
+  <Terminal target="postgres.container.shipyard.run" shell="/bin/bash" workdir="/" user="root"/>
+</p>
 
-Using the command from earlier you can 
+You can validate that this cyphertext is correct using the CLI like in the earlier example:
 
 ```shell
 vault write transform/decode/payments value=<card_number>
@@ -431,4 +475,11 @@ vault write transform/decode/payments value=<card_number>
 
 ## Summary
 
-In this demo you have seen how you can 
+In this demo you have seen how the new Transform secrets engine can be used to partially encrypt credit card numbers at reset, enabling you to preseve both the formatting and to query the issuer. You have seen:
+
+* How you can configure Transofrm secrets
+* Interact with Transform using the CLI
+* Interact with Transform using the API
+* Examples of of use for Go and Java.
+
+This example only covers one of the possibilities for the Transform secrets engine, if you have an interesting use case for Transform let us know we would love to feature this in a future post.
