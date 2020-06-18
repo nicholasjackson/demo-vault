@@ -7,6 +7,15 @@ Note: This demo uses Vault Enterprise 1.4, Vault Enterprise in trial mode is lim
 * Docker []()
 * Shipyard [https://shipyard.run/docs/install](https://shipyard.run/docs/install)
 
+```json
+{
+  "card_number": "1234-1234-1234-1234",
+  "expiration": "0423",
+  "cv2": "123"
+}
+
+```
+
 ## Running the demo
 The demo uses Shipyard to start a Vault server and example application in Docker on your local machine. To run the demo use the following command:
 
@@ -21,7 +30,7 @@ Running configuration from:  ./blueprint
 Once started interactive documentation can be run for the demo at [http://docs.docs.shipyard.run:8080/docs/index](http://docs.docs.shipyard.run:8080/docs/index). The Vault server, Postgres server and example applications are also accessible from your terminal at the following locations:
 
 * Vault `localhost:8200`
-* Postgres `localhost:5432` DB: `payments`, User: `root`, Pass: `password`
+* PostgreSQL `localhost:5432` DB: `payments`, User: `root`, Pass: `password`
 * Java example application `localhost:9092`
 * Go example application  `localhost:9091`
 
