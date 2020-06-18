@@ -20,6 +20,9 @@ For information on the technical detail behind the Transform engine please see A
 
 
 ## API Structure
+
+![](./images/api.png)
+
 Our example application is a simple RESTful payment service, backed by a PostgreSQL database, there is a single route which accepts a POST request.
 
 ```
@@ -47,9 +50,6 @@ On a succesfull call to the API, the data is saved to the database and a transac
   "transaction_id": "1234"
 }
 ```
-
-![](./images/api.png)
-
 
 ## Security Requirements
 The security requirements for the API are:
