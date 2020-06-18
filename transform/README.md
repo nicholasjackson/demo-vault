@@ -7,15 +7,6 @@ Note: This demo uses Vault Enterprise 1.4, Vault Enterprise in trial mode is lim
 * Docker []()
 * Shipyard [https://shipyard.run/docs/install](https://shipyard.run/docs/install)
 
-```json
-{
-  "card_number": "1234-1234-1234-1234",
-  "expiration": "0423",
-  "cv2": "123"
-}
-
-```
-
 ## Running the demo
 The demo uses Shipyard to start a Vault server and example application in Docker on your local machine. To run the demo use the following command:
 
